@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace = "com.turbocg.matesito"
+    namespace = "com.turbocg.totake"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.turbocg.matesito"
+        applicationId = "com.turbocg.totake"
         minSdk = 28
         targetSdk = 35
         versionCode = 1

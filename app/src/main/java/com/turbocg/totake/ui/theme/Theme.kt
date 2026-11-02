@@ -1,4 +1,4 @@
-package com.turbocg.matesito.ui.theme
+package com.turbocg.totake.ui.theme
 
 import android.app.Activity
 import android.os.Build
@@ -52,7 +52,6 @@ fun MatesitoTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography,
         content = content
     )
 }

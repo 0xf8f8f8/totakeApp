@@ -1,6 +1,9 @@
-package com.turbocg.matesito
+package com.turbocg.totake
 
 // import android.webkit.CookieManager
+import android.Manifest
+import android.R
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -12,6 +15,8 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
@@ -26,8 +31,15 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import android.graphics.Color
+import androidx.annotation.RequiresPermission
+import androidx.core.view.updatePadding
+import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.WebNotification
+import org.mozilla.geckoview.WebNotificationDelegate
 import java.io.File
 import java.io.FileOutputStream
+
 
 
 @Suppress("COMPOSE_APPLIER_CALL_MISMATCH")
@@ -87,18 +99,25 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+        super.onCreate(savedInstanceState)   // ✅ 必须先调 super
+
+        // Android 13+ 动态申请通知权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 100)
+        }
+
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(
-                "#0a0a0a".toColorInt()
+            statusBarStyle = SystemBarStyle.light(
+                Color.TRANSPARENT, Color.TRANSPARENT
             ),
-            navigationBarStyle = SystemBarStyle.dark(
-                "#0a0a0a".toColorInt()
+            navigationBarStyle = SystemBarStyle.light(
+                Color.TRANSPARENT, Color.TRANSPARENT
             )
         )
+
         val container = FrameLayout(this)
         val navBarColorBg = View(this).apply {
-            setBackgroundColor("#0a0a0a".toColorInt())
+            setBackgroundColor("#FFFFFF".toColorInt())
         }
         container.addView(navBarColorBg, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -106,28 +125,68 @@ class MainActivity : ComponentActivity() {
         ).apply {
             gravity = Gravity.BOTTOM
         })
+
         runtime = GeckoRuntime.create(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
         }
-        val geckoView = GeckoView(this)
-        val session = GeckoSession()
 
+        // ✅ 先创建 session（赋值给类的 lateinit 字段，不要 val 重复声明）
+        session = GeckoSession()
+
+        // ✅ 这时 session 已存在，可以设置 permissionDelegate
+        session.permissionDelegate = object : GeckoSession.PermissionDelegate {
+            override fun onContentPermissionRequest(
+                session: GeckoSession,
+                perm: GeckoSession.PermissionDelegate.ContentPermission
+            ): GeckoResult<Int>? {
+                return if (perm.permission == GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION) {
+                    GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                } else {
+                    GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                }
+            }
+        }
+
+        // 通知 delegate
+        runtime.webNotificationDelegate = object : WebNotificationDelegate {
+            @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
+            override fun onShowNotification(notification: WebNotification) {
+                val builder = NotificationCompat.Builder(this@MainActivity, "web_channel")
+                    .setContentTitle(notification.title ?: "Notificación")
+                    .setContentText(notification.text ?: "")
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setAutoCancel(true)
+
+                NotificationManagerCompat.from(this@MainActivity)
+                    .notify(notification.tag.hashCode(), builder.build())
+            }
+
+            override fun onCloseNotification(notification: WebNotification) {
+                runOnUiThread {
+                    // vacío o dismiss() si existe
+                }
+            }
+        }
+
+        val geckoView = GeckoView(this)
         session.open(runtime)
         geckoView.setSession(session)
         container.addView(geckoView, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ))
+
         val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = connectivityManager.activeNetwork
         val capabilities = connectivityManager.getNetworkCapabilities(network)
         if (capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true) {
-            session.loadUri("https://matesito.com.ar")
+            session.loadUri("https://totake-fe.onrender.com/mainpage")
         } else {
-            session.loadUri("resource://android/assets/index.html")
+            session.loadUri("about:blank")
         }
-        session.promptDelegate = object: GeckoSession.PromptDelegate {
+
+        session.promptDelegate = object : GeckoSession.PromptDelegate {
             override fun onFilePrompt(
                 session: GeckoSession,
                 prompt: GeckoSession.PromptDelegate.FilePrompt
@@ -147,19 +206,56 @@ class MainActivity : ComponentActivity() {
                 return result
             }
         }
+
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onLoadRequest(
+                session: GeckoSession,
+                request: GeckoSession.NavigationDelegate.LoadRequest
+            ): GeckoResult<AllowOrDeny?>? {
+                val uri = Uri.parse(request.uri)
+
+                if (uri.scheme == "intent") {
+                    try {
+                        val intent = Intent.parseUri(request.uri, Intent.URI_INTENT_SCHEME)
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        val fallback = try {
+                            Intent.parseUri(request.uri, Intent.URI_INTENT_SCHEME)
+                                .getStringExtra("browser_fallback_url")
+                        } catch (_: Exception) { null }
+                        if (fallback != null) session.loadUri(fallback)
+                    }
+                    return GeckoResult.fromValue(AllowOrDeny.DENY)
+                }
+
+                if (uri.scheme == "paypal" || uri.scheme == "mercadopago") {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    } catch (_: Exception) { }
+                    return GeckoResult.fromValue(AllowOrDeny.DENY)
+                }
+
+                return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+            }
+
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                 this@MainActivity.canGoBack = canGoBack
             }
         }
+
         ViewCompat.setOnApplyWindowInsetsListener(container) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.updatePadding(
+                top = bars.top,
+                bottom = bars.bottom
+            )
             navBarColorBg.layoutParams.height = bars.bottom
             navBarColorBg.requestLayout()
-            geckoView.translationY = bars.top.toFloat()
             insets
         }
+
         setContentView(container)
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (canGoBack) {
